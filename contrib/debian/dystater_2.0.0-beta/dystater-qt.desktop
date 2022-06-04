@@ -1,0 +1,12 @@
+[Desktop Entry]
+Encoding=UTF-8
+Name=Dystater
+Comment=Dystater P2P Cryptocurrency
+Comment[fr]=Dystater, monnaie virtuelle cryptographique pair à pair
+Comment[tr]=Dystater, eşten eşe kriptografik sanal para birimi
+Exec=/usr/local/bin/dystater-qt
+Terminal=false
+Type=Application
+Icon=/usr/local/share/pixmaps/dystater80.xpm
+MimeType=x-scheme-handler/dystater;
+Categories=Office;

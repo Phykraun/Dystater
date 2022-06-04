@@ -1,0 +1,58 @@
+Source: dystater
+Section: utils
+Priority: optional
+Maintainer: Jonas Smedegaard <dr@jones.dk>
+Uploaders: Micah Anderson <micah@debian.org>
+Build-Depends: debhelper,
+ devscripts,
+ libboost-system-dev
+ libdb6.0++-dev,
+ libssl-dev,
+ pkg-config,
+ libminiupnpc-dev,
+ libboost-filesystem-dev (>> 1.77)
+ libboost-program-options-dev (>> 1.77)
+ libboost-thread-dev
+ libboost-test-dev
+ qt5-qmake,
+ libqt5-dev,
+ libqrencode-dev
+Standards-Version: 2.0.0
+Homepage: http://www.rebrand.ly/phykraun
+Vcs-Git: git://github.com/devt3000/dystater.git
+Vcs-Browser: http://github.com/devt3000
+
+Package: dystaterd
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Description: peer-to-peer network based digital currency - daemon
+ Dystater is a free open source peer-to-peer electronic cash system that
+ is completely decentralized, without the need for a central server or
+ trusted parties.  Users hold the crypto keys to their own money and
+ transact directly with each other, with the help of a P2P network to
+ check for double-spending.
+ .
+ By default connects to an IRC network to discover other peers.
+ .
+ Full transaction history is stored locally at each client.  This
+ requires 150+ MB of space, slowly growing.
+ .
+ This package provides dystaterd, a combined daemon and CLI tool to
+ interact with the daemon.
+
+Package: dystater-qt
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Description: peer-to-peer network based digital currency - QT GUI
+ Dystater is a free open source peer-to-peer electronic cash system that
+ is completely decentralized, without the need for a central server or
+ trusted parties.  Users hold the crypto keys to their own money and
+ transact directly with each other, with the help of a P2P network to
+ check for double-spending.
+ .
+ By default connects to an IRC network to discover other peers.
+ .
+ Full transaction history is stored locally at each client.  This
+ requires 150+ MB of space, slowly growing.
+ .
+ This package provides dystater-qt, a GUI for Dystater based on QT.
