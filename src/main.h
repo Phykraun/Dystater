@@ -195,14 +195,24 @@ std::string GetWarnings(std::string strFor);
 /** Retrieve a transaction (from memory pool, or from disk, if possible) */
 bool GetTransaction(const uint256 &hash, CTransaction &tx, uint256 &hashBlock, bool fAllowSlow = false);
 /** Find the best known block, and make it the tip of the block chain */
-bool ActivateBestChain
+bool ActivateBestChain(CValidationState &state, CBlock *pblock = NULL);
+CAmount GetBlockValue(int nHeight, const CAmount& nFees);
 
 /** Create a new block index entry for a given block hash */
 CBlockIndex * InsertBlockIndex(uint256 hash);
-/** Verify a signature */
-bool VerifySignature(const CCoins& txFrom, const CTransaction& txTo, unsigned int nIn, unsigned int flags, int nHashType);
 /** Abort with a message */
-bool AbortNode(const std::string &msg);
+bool AbortNode(const std::string &msg, const std::string &userMessage="");
+/** Get statistics from node state */
+bool GetNodeStateStats(NodeId nodeid, CNodeStateStats &stats);
+/** Increase a node's misbehavior score. */
+void Misbehaving(NodeId nodeid, int howmuch);
+/** Flush all state, indexes and buffers to disk. */
+void FlushStateToDisk();
+
+
+/** (try to) add transaction to memory pool **/
+bool AcceptToMemoryPool(CTxMemPool& pool, CValidationState &state, const CTransaction &tx, bool fLimitFree,
+                        bool* pfMissingInputs, bool fRejectInsaneFee=false);
 
 
 
@@ -214,38 +224,18 @@ bool AbortNode(const std::string &msg);
 
 
 
-bool GetWalletFile(CWallet* pwallet, std::string &strWalletFileOut);
 
-struct CDiskBlockPos
-{
-    int nFile;
-    unsigned int nPos;
 
-    IMPLEMENT_SERIALIZE(
-        READWRITE(VARINT(nFile));
-        READWRITE(VARINT(nPos));
-    )
 
-    CDiskBlockPos() {
-        SetNull();
-    }
 
-    CDiskBlockPos(int nFileIn, unsigned int nPosIn) {
-        nFile = nFileIn;
-        nPos = nPosIn;
-    }
 
-    friend bool operator==(const CDiskBlockPos &a, const CDiskBlockPos &b) {
-        return (a.nFile == b.nFile && a.nPos == b.nPos);
-    }
 
-    friend bool operator!=(const CDiskBlockPos &a, const CDiskBlockPos &b) {
-        return !(a == b);
-    }
 
-    void SetNull() { nFile = -1; nPos = 0; }
-    bool IsNull() const { return (nFile == -1); }
-};
+
+
+
+
+
 
 struct CDiskTxPos : public CDiskBlockPos
 {
