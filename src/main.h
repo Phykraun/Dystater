@@ -301,6 +301,31 @@ void UpdateCoins(const CTransaction& tx, CValidationState &state, CCoinsViewCach
 /** Context-independent validity checks */
 bool CheckTransaction(const CTransaction& tx, CValidationState& state);
 
+/** Check for standard transaction types
+ * @return True if all outputs (scriptPubKeys) use only standard transaction forms
+ */
+bool IsStandardTx(const CTransaction& tx, std::string& reason);
+
+bool IsFinalTx(const CTransaction &tx, int nBlockHeight = 0, int64_t nBlockTime = 0);
+
+/** Undo information for a CBlock */
+class CBlockUndo
+{
+public:
+    std::vector<CTxUndo> vtxundo; // for all but the coinbase
+
+    ADD_SERIALIZE_METHODS;
+
+    template <typename Stream, typename Operation>
+    inline void SerializationOp(Stream& s, Operation ser_action, int nType, int nVersion) {
+        READWRITE(vtxundo);
+    }
+
+    bool WriteToDisk(CDiskBlockPos &pos, const uint256 &hashBlock);
+    bool ReadFromDisk(const CDiskBlockPos &pos, const uint256 &hashBlock);
+};
+
+/**
     /** Undo the effects of this block (with given index) on the UTXO set represented by coins.
      *  In case pfClean is provided, operation will try to be tolerant about errors, and *pfClean
      *  will be true if no problems were found. Otherwise, the return value will be false in case
