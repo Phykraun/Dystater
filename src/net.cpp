@@ -4,30 +4,54 @@
 // Distributed under the MIT/X11 software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
+#if defined(HAVE_CONFIG_H)
+#include "config/dystater-config.h"
+#endif
 
-#include "db.h"
 #include "net.h"
-#include "init.h"
+
 #include "addrman.h"
+#include "chainparams.h"
+#include "clientversion.h"
+#include "primitives/transaction.h"
 #include "ui_interface.h"
-#include "script.h"
 
 #ifdef WIN32
 #include <string.h>
+#else
+#include <fcntl.h>
 #endif
 
 #ifdef USE_UPNP
-#include <miniupnpc/miniwget.h>
 #include <miniupnpc/miniupnpc.h>
+#include <miniupnpc/miniwget.h>
 #include <miniupnpc/upnpcommands.h>
 #include <miniupnpc/upnperrors.h>
 #endif
 
+#include <boost/filesystem.hpp>
+#include <boost/thread.hpp>
+
 // Dump addresses to peers.dat every 15 minutes (900s)
 #define DUMP_ADDRESSES_INTERVAL 900
 
-using namespace std;
+#if !defined(HAVE_MSG_NOSIGNAL) && !defined(MSG_NOSIGNAL)
+#define MSG_NOSIGNAL 0
+#endif
+
+// Fix for ancient MinGW versions, that don't have defined these in ws2tcpip.h.
+// Todo: Can be removed when our pull-tester is upgraded to a modern MinGW version.
+#ifdef WIN32
+#ifndef PROTECTION_LEVEL_UNRESTRICTED
+#define PROTECTION_LEVEL_UNRESTRICTED 10
+#endif
+#ifndef IPV6_PROTECTION_LEVEL
+#define IPV6_PROTECTION_LEVEL 23
+#endif
+#endif
+
 using namespace boost;
+using namespace std;
 
 static const int MAX_OUTBOUND_CONNECTIONS = 8;
 
