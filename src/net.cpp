@@ -505,11 +505,27 @@ bool CNode::Ban(const CNetAddr &addr) {
 
 
 std::vector<CSubNet> CNode::vWhitelistedRange;
+CCriticalSection CNode::cs_vWhitelistedRange;
+
+bool CNode::IsWhitelistedRange(const CNetAddr &addr) {
+    LOCK(cs_vWhitelistedRange);
+    BOOST_FOREACH(const CSubNet& subnet, vWhitelistedRange) {
+        if (subnet.Match(addr))
+            return true;
+    }
+    return false;
+}
+
+void CNode::AddWhitelistedRange(const CSubNet &subnet) {
+    LOCK(cs_vWhitelistedRange);
+    vWhitelistedRange.push_back(subnet);
+}
 
 #undef X
 #define X(name) stats.name = name
 void CNode::copyStats(CNodeStats &stats)
 {
+    stats.nodeid = this->GetId();
     X(nServices);
     X(nLastSend);
     X(nLastRecv);
@@ -519,10 +535,27 @@ void CNode::copyStats(CNodeStats &stats)
     X(cleanSubVer);
     X(fInbound);
     X(nStartingHeight);
-    X(nMisbehavior);
     X(nSendBytes);
     X(nRecvBytes);
-    stats.fSyncNode = (this == pnodeSync);
+    X(fWhitelisted);
+
+    // It is common for nodes with good ping times to suddenly become lagged,
+    // due to a new block arriving or other large transfer.
+    // Merely reporting pingtime might fool the caller into thinking the node was still responsive,
+    // since pingtime does not update until the ping is complete, which might take a while.
+    // So, if a ping is taking an unusually long time in flight,
+    // the caller can immediately detect that this is happening.
+    int64_t nPingUsecWait = 0;
+    if ((0 != nPingNonceSent) && (0 != nPingUsecStart)) {
+        nPingUsecWait = GetTimeMicros() - nPingUsecStart;
+    }
+
+    // Raw ping time is in microseconds, but show it to user as whole seconds (Dystater users should be well used to small numbers with many decimal places by now :)
+    stats.dPingTime = (((double)nPingUsecTime) / 1e6);
+    stats.dPingWait = (((double)nPingUsecWait) / 1e6);
+
+    // Leave string empty if addrLocal invalid (not filled in yet)
+    stats.addrLocal = addrLocal.IsValid() ? addrLocal.ToString() : "";
 }
 #undef X
 
@@ -535,7 +568,7 @@ bool CNode::ReceiveMsgBytes(const char *pch, unsigned int nBytes)
         if (vRecvMsg.empty() ||
             vRecvMsg.back().complete())
             vRecvMsg.push_back(CNetMessage(SER_NETWORK, nRecvVersion));
-        
+
         CNetMessage& msg = vRecvMsg.back();
 
         // absorb network data
@@ -550,6 +583,9 @@ bool CNode::ReceiveMsgBytes(const char *pch, unsigned int nBytes)
 
         pch += handled;
         nBytes -= handled;
+
+        if (msg.complete())
+            msg.nTime = GetTimeMicros();
     }
 
     return true;
@@ -572,7 +608,7 @@ int CNetMessage::readHeader(const char *pch, unsigned int nBytes)
     try {
         hdrbuf >> hdr;
     }
-    catch (std::exception &e) {
+    catch (const std::exception &) {
         return -1;
     }
 
@@ -582,7 +618,6 @@ int CNetMessage::readHeader(const char *pch, unsigned int nBytes)
 
     // switch state to reading message data
     in_data = true;
-    vRecv.resize(hdr.nMessageSize);
 
     return nCopy;
 }
@@ -591,6 +626,11 @@ int CNetMessage::readData(const char *pch, unsigned int nBytes)
 {
     unsigned int nRemaining = hdr.nMessageSize - nDataPos;
     unsigned int nCopy = std::min(nRemaining, nBytes);
+
+    if (vRecv.size() < nDataPos + nCopy) {
+        // Allocate up to 256 KiB ahead, but never more than the total message size.
+        vRecv.resize(std::min(hdr.nMessageSize, nDataPos + nCopy + 256 * 1024));
+    }
 
     memcpy(&vRecv[nDataPos], pch, nCopy);
     nDataPos += nCopy;
@@ -615,12 +655,11 @@ void SocketSendData(CNode *pnode)
         const CSerializeData &data = *it;
         assert(data.size() > pnode->nSendOffset);
         int nBytes = send(pnode->hSocket, &data[pnode->nSendOffset], data.size() - pnode->nSendOffset, MSG_NOSIGNAL | MSG_DONTWAIT);
-
-        
         if (nBytes > 0) {
             pnode->nLastSend = GetTime();
             pnode->nSendBytes += nBytes;
             pnode->nSendOffset += nBytes;
+            pnode->RecordBytesSent(nBytes);
             if (pnode->nSendOffset == data.size()) {
                 pnode->nSendOffset = 0;
                 pnode->nSendSize -= data.size();
@@ -633,11 +672,9 @@ void SocketSendData(CNode *pnode)
             if (nBytes < 0) {
                 // error
                 int nErr = WSAGetLastError();
-
-
                 if (nErr != WSAEWOULDBLOCK && nErr != WSAEMSGSIZE && nErr != WSAEINTR && nErr != WSAEINPROGRESS)
                 {
-                    printf("socket send error %d\n", nErr);
+                    LogPrintf("socket send error %s\n", NetworkErrorString(nErr));
                     pnode->CloseSocketDisconnect();
                 }
             }
@@ -658,7 +695,7 @@ static list<CNode*> vNodesDisconnected;
 void ThreadSocketHandler()
 {
     unsigned int nPrevNodeCount = 0;
-    loopa
+    while (true)
     {
         //
         // Disconnect nodes
@@ -680,7 +717,6 @@ void ThreadSocketHandler()
 
                     // close socket and cleanup
                     pnode->CloseSocketDisconnect();
-                    pnode->Cleanup();
 
                     // hold in disconnected pool until all refs are released
                     if (pnode->fNetworkNode || pnode->fInbound)
@@ -688,7 +724,8 @@ void ThreadSocketHandler()
                     vNodesDisconnected.push_back(pnode);
                 }
             }
-
+        }
+        {
             // Delete disconnected nodes
             list<CNode*> vNodesDisconnectedCopy = vNodesDisconnected;
             BOOST_FOREACH(CNode* pnode, vNodesDisconnectedCopy)
@@ -718,12 +755,10 @@ void ThreadSocketHandler()
                 }
             }
         }
-        if (vNodes.size() != nPrevNodeCount)
-        {
+        if(vNodes.size() != nPrevNodeCount) {
             nPrevNodeCount = vNodes.size();
-            uiInterface.NotifyNumConnectionsChanged(vNodes.size());
+            uiInterface.NotifyNumConnectionsChanged(nPrevNodeCount);
         }
-
 
         //
         // Find which sockets have data to receive
@@ -741,11 +776,12 @@ void ThreadSocketHandler()
         SOCKET hSocketMax = 0;
         bool have_fds = false;
 
-        BOOST_FOREACH(SOCKET hListenSocket, vhListenSocket) {
-            FD_SET(hListenSocket, &fdsetRecv);
-            hSocketMax = max(hSocketMax, hListenSocket);
+        BOOST_FOREACH(const ListenSocket& hListenSocket, vhListenSocket) {
+            FD_SET(hListenSocket.socket, &fdsetRecv);
+            hSocketMax = max(hSocketMax, hListenSocket.socket);
             have_fds = true;
         }
+
         {
             LOCK(cs_vNodes);
             BOOST_FOREACH(CNode* pnode, vNodes)
@@ -759,22 +795,14 @@ void ThreadSocketHandler()
                 // Implement the following logic:
                 // * If there is data to send, select() for sending data. As this only
                 //   happens when optimistic write failed, we choose to first drain the
-
-
                 //   write buffer in this case before receiving more. This avoids
                 //   needlessly queueing received data, if the remote peer is not themselves
                 //   receiving data. This means properly utilizing TCP flow control signalling.
-
-
                 // * Otherwise, if there is no (complete) message in the receive buffer,
                 //   or there is space left in the buffer, select() for receiving data.
-
-
                 // * (if neither of the above applies, there is certainly one message
                 //   in the receiver buffer ready to be processed).
                 // Together, that means that at least one of the following is always possible,
-
-
                 // so we don't deadlock:
                 // * We send some data.
                 // * We wait for data to be received (and disconnect after timeout).
@@ -805,7 +833,7 @@ void ThreadSocketHandler()
             if (have_fds)
             {
                 int nErr = WSAGetLastError();
-                printf("socket select error %d\n", nErr);
+                LogPrintf("socket select error %s\n", NetworkErrorString(nErr));
                 for (unsigned int i = 0; i <= hSocketMax; i++)
                     FD_SET(i, &fdsetRecv);
             }
@@ -814,65 +842,59 @@ void ThreadSocketHandler()
             MilliSleep(timeout.tv_usec/1000);
         }
 
-
         //
         // Accept new connections
         //
-        BOOST_FOREACH(SOCKET hListenSocket, vhListenSocket)
-        if (hListenSocket != INVALID_SOCKET && FD_ISSET(hListenSocket, &fdsetRecv))
+        BOOST_FOREACH(const ListenSocket& hListenSocket, vhListenSocket)
         {
-#ifdef USE_IPV6
-            struct sockaddr_storage sockaddr;
-#else
-            struct sockaddr sockaddr;
-#endif
-            socklen_t len = sizeof(sockaddr);
-            SOCKET hSocket = accept(hListenSocket, (struct sockaddr*)&sockaddr, &len);
-            CAddress addr;
-            int nInbound = 0;
+            if (hListenSocket.socket != INVALID_SOCKET && FD_ISSET(hListenSocket.socket, &fdsetRecv))
+            {
+                struct sockaddr_storage sockaddr;
+                socklen_t len = sizeof(sockaddr);
+                SOCKET hSocket = accept(hListenSocket.socket, (struct sockaddr*)&sockaddr, &len);
+                CAddress addr;
+                int nInbound = 0;
 
-            if (hSocket != INVALID_SOCKET)
-                if (!addr.SetSockAddr((const struct sockaddr*)&sockaddr))
-                    printf("Warning: Unknown socket family\n");
+                if (hSocket != INVALID_SOCKET)
+                    if (!addr.SetSockAddr((const struct sockaddr*)&sockaddr))
+                        LogPrintf("Warning: Unknown socket family\n");
 
-            {
-                LOCK(cs_vNodes);
-                BOOST_FOREACH(CNode* pnode, vNodes)
-                    if (pnode->fInbound)
-                        nInbound++;
-            }
-                
-            if (hSocket == INVALID_SOCKET)
-            {
-                int nErr = WSAGetLastError();
-                if (nErr != WSAEWOULDBLOCK)
-                    printf("socket error accept failed: %d\n", nErr);
-            }
-            else if (nInbound >= nMaxConnections - MAX_OUTBOUND_CONNECTIONS)
-            {
-                {
-                    LOCK(cs_setservAddNodeAddresses);
-                    if (!setservAddNodeAddresses.count(addr))
-                        closesocket(hSocket);
-                }
-            }
-            else if (CNode::IsBanned(addr))
-            {
-                printf("connection from %s dropped (banned)\n", addr.ToString().c_str());
-                closesocket(hSocket);
-            }
-            else
-            {
-                printf("accepted connection %s\n", addr.ToString().c_str());
-                CNode* pnode = new CNode(hSocket, addr, "", true);
-                pnode->AddRef();
+                bool whitelisted = hListenSocket.whitelisted || CNode::IsWhitelistedRange(addr);
                 {
                     LOCK(cs_vNodes);
-                    vNodes.push_back(pnode);
+                    BOOST_FOREACH(CNode* pnode, vNodes)
+                        if (pnode->fInbound)
+                            nInbound++;
+                }
+
+                if (hSocket == INVALID_SOCKET)
+                {
+                    int nErr = WSAGetLastError();
+                    if (nErr != WSAEWOULDBLOCK)
+                        LogPrintf("socket error accept failed: %s\n", NetworkErrorString(nErr));
+                }
+                else if (nInbound >= nMaxConnections - MAX_OUTBOUND_CONNECTIONS)
+                {
+                    CloseSocket(hSocket);
+                }
+                else if (CNode::IsBanned(addr) && !whitelisted)
+                {
+                    LogPrintf("connection from %s dropped (banned)\n", addr.ToString());
+                    CloseSocket(hSocket);
+                }
+                else
+                {
+                    CNode* pnode = new CNode(hSocket, addr, "", true);
+                    pnode->AddRef();
+                    pnode->fWhitelisted = whitelisted;
+
+                    {
+                        LOCK(cs_vNodes);
+                        vNodes.push_back(pnode);
+                    }
                 }
             }
         }
-
 
         //
         // Service each socket
@@ -908,12 +930,13 @@ void ThreadSocketHandler()
                                 pnode->CloseSocketDisconnect();
                             pnode->nLastRecv = GetTime();
                             pnode->nRecvBytes += nBytes;
+                            pnode->RecordBytesRecv(nBytes);
                         }
                         else if (nBytes == 0)
                         {
                             // socket closed gracefully
                             if (!pnode->fDisconnect)
-                                printf("socket closed\n");
+                                LogPrint("net", "socket closed\n");
                             pnode->CloseSocketDisconnect();
                         }
                         else if (nBytes < 0)
@@ -923,7 +946,7 @@ void ThreadSocketHandler()
                             if (nErr != WSAEWOULDBLOCK && nErr != WSAEMSGSIZE && nErr != WSAEINTR && nErr != WSAEINPROGRESS)
                             {
                                 if (!pnode->fDisconnect)
-                                    printf("socket recv error %d\n", nErr);
+                                    LogPrintf("socket recv error %s\n", NetworkErrorString(nErr));
                                 pnode->CloseSocketDisconnect();
                             }
                         }
@@ -946,23 +969,27 @@ void ThreadSocketHandler()
             //
             // Inactivity checking
             //
-            if (pnode->vSendMsg.empty())
-                pnode->nLastSendEmpty = GetTime();
-            if (GetTime() - pnode->nTimeConnected > 60)
+            int64_t nTime = GetTime();
+            if (nTime - pnode->nTimeConnected > 60)
             {
                 if (pnode->nLastRecv == 0 || pnode->nLastSend == 0)
                 {
-                    printf("socket no message in first 60 seconds, %d %d\n", pnode->nLastRecv != 0, pnode->nLastSend != 0);
+                    LogPrint("net", "socket no message in first 60 seconds, %d %d from %d\n", pnode->nLastRecv != 0, pnode->nLastSend != 0, pnode->id);
                     pnode->fDisconnect = true;
                 }
-                else if (GetTime() - pnode->nLastSend > 90*60 && GetTime() - pnode->nLastSendEmpty > 90*60)
+                else if (nTime - pnode->nLastSend > TIMEOUT_INTERVAL)
                 {
-                    printf("socket not sending\n");
+                    LogPrintf("socket sending timeout: %is\n", nTime - pnode->nLastSend);
                     pnode->fDisconnect = true;
                 }
-                else if (GetTime() - pnode->nLastRecv > 90*60)
+                else if (nTime - pnode->nLastRecv > (pnode->nVersion > BIP0031_VERSION ? TIMEOUT_INTERVAL : 90*60))
                 {
-                    printf("socket inactivity timeout\n");
+                    LogPrintf("socket receive timeout: %is\n", nTime - pnode->nLastRecv);
+                    pnode->fDisconnect = true;
+                }
+                else if (pnode->nPingNonceSent && pnode->nPingUsecStart + TIMEOUT_INTERVAL * 1000000 < GetTimeMicros())
+                {
+                    LogPrintf("ping timeout: %fs\n", 0.000001 * (GetTimeMicros() - pnode->nPingUsecStart));
                     pnode->fDisconnect = true;
                 }
             }
@@ -972,8 +999,6 @@ void ThreadSocketHandler()
             BOOST_FOREACH(CNode* pnode, vNodesCopy)
                 pnode->Release();
         }
-
-        MilliSleep(10);
     }
 }
 
