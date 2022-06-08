@@ -40,7 +40,7 @@
 #endif
 
 // Fix for ancient MinGW versions, that don't have defined these in ws2tcpip.h.
-// Todo: Can be removed when our pull-tester is upgraded to a modern MinGW version.
+// Todo: Can be removed when our pull-tester is upgraded t5o a modern MinGW version.
 #ifdef WIN32
 #ifndef PROTECTION_LEVEL_UNRESTRICTED
 #define PROTECTION_LEVEL_UNRESTRICTED 10
@@ -53,37 +53,42 @@
 using namespace boost;
 using namespace std;
 
-static const int MAX_OUTBOUND_CONNECTIONS = 8;
 
-bool OpenNetworkConnection(const CAddress& addrConnect, CSemaphoreGrant *grantOutbound = NULL, const char *strDest = NULL, bool fOneShot = false);
+namespace {
+    const int MAX_OUTBOUND_CONNECTIONS = 8;
 
-struct LocalServiceInfo {
-    int nScore;
-    int nPort;
-};
+    struct ListenSocket {
+        SOCKET socket;
+        bool whitelisted;
+
+        ListenSocket(SOCKET socket, bool whitelisted) : socket(socket), whitelisted(whitelisted) {}
+    };
+}
+
 
 //
 // Global state variables
 //
 bool fDiscover = true;
-uint64 nLocalServices = NODE_NETWORK;
-static CCriticalSection cs_mapLocalHost;
-static map<CNetAddr, LocalServiceInfo> mapLocalHost;
+bool fListen = true;
+uint64_t nLocalServices = NODE_NETWORK;
+CCriticalSection cs_mapLocalHost;
+map<CNetAddr, LocalServiceInfo> mapLocalHost;
 static bool vfReachable[NET_MAX] = {};
 static bool vfLimited[NET_MAX] = {};
 static CNode* pnodeLocalHost = NULL;
-static CNode* pnodeSync = NULL;
-uint64 nLocalHostNonce = 0;
-static std::vector<SOCKET> vhListenSocket;
+uint64_t nLocalHostNonce = 0;
+static std::vector<ListenSocket> vhListenSocket;
 CAddrMan addrman;
 int nMaxConnections = 125;
+bool fAddressesInitialized = false;
 
 vector<CNode*> vNodes;
 CCriticalSection cs_vNodes;
 map<CInv, CDataStream> mapRelay;
-deque<pair<int64, CInv> > vRelayExpiration;
+deque<pair<int64_t, CInv> > vRelayExpiration;
 CCriticalSection cs_mapRelay;
-limitedmap<CInv, int64> mapAlreadyAskedFor(MAX_INV_SZ);
+limitedmap<CInv, int64_t> mapAlreadyAskedFor(MAX_INV_SZ);
 
 static deque<string> vOneShots;
 CCriticalSection cs_vOneShots;
@@ -94,7 +99,14 @@ CCriticalSection cs_setservAddNodeAddresses;
 vector<std::string> vAddedNodes;
 CCriticalSection cs_vAddedNodes;
 
+NodeId nLastNodeId = 0;
+CCriticalSection cs_nLastNodeId;
+
 static CSemaphore *semOutbound = NULL;
+
+// Signals for message handling
+static CNodeSignals g_signals;
+CNodeSignals& GetNodeSignals() { return g_signals; }
 
 void AddOneShot(string strDest)
 {
@@ -104,26 +116,15 @@ void AddOneShot(string strDest)
 
 unsigned short GetListenPort()
 {
-    return (unsigned short)(GetArg("-port", GetDefaultPort()));
-}
-
-void CNode::PushGetBlocks(CBlockIndex* pindexBegin, uint256 hashEnd)
-{
-    // Filter out duplicate requests
-    if (pindexBegin == pindexLastGetBlocksBegin && hashEnd == hashLastGetBlocksEnd)
-        return;
-    pindexLastGetBlocksBegin = pindexBegin;
-    hashLastGetBlocksEnd = hashEnd;
-
-    PushMessage("getblocks", CBlockLocator(pindexBegin), hashEnd);
+    return (unsigned short)(GetArg("-port", Params().GetDefaultPort()));
 }
 
 // find 'best' local address for a particular peer
 bool GetLocal(CService& addr, const CNetAddr *paddrPeer)
 {
-    if (fNoListen)
+    if (!fListen)
         return false;
-    
+
     int nBestScore = -1;
     int nBestReachability = -1;
     {
@@ -132,8 +133,6 @@ bool GetLocal(CService& addr, const CNetAddr *paddrPeer)
         {
             int nScore = (*it).second.nScore;
             int nReachability = (*it).first.GetReachabilityFrom(paddrPeer);
-
-
             if (nReachability > nBestReachability || (nReachability == nBestReachability && nScore > nBestScore))
             {
                 addr = CService((*it).first, (*it).second.nPort);
@@ -146,23 +145,26 @@ bool GetLocal(CService& addr, const CNetAddr *paddrPeer)
 }
 
 // get best local address for a particular peer as a CAddress
+// Otherwise, return the unroutable 0.0.0.0 but filled in with
+// the normal parameters, since the IP may be changed to a useful
+// one by discovery.
 CAddress GetLocalAddress(const CNetAddr *paddrPeer)
 {
-    CAddress ret(CService("0.0.0.0",0),0);
+    CAddress ret(CService("0.0.0.0",GetListenPort()),0);
     CService addr;
     if (GetLocal(addr, paddrPeer))
     {
         ret = CAddress(addr);
-        ret.nServices = nLocalServices;
-        ret.nTime = GetAdjustedTime();
     }
+    ret.nServices = nLocalServices;
+    ret.nTime = GetAdjustedTime();
     return ret;
 }
 
 bool RecvLine(SOCKET hSocket, string& strLine)
 {
     strLine = "";
-    loopa
+    while (true)
     {
         char c;
         int nBytes = recv(hSocket, &c, 1, 0);
@@ -195,14 +197,14 @@ bool RecvLine(SOCKET hSocket, string& strLine)
             if (nBytes == 0)
             {
                 // socket closed
-                printf("socket closed\n");
+                LogPrint("net", "socket closed\n");
                 return false;
             }
             else
             {
                 // socket error
                 int nErr = WSAGetLastError();
-                printf("recv failed: %d\n", nErr);
+                LogPrint("net", "recv failed: %s\n", NetworkErrorString(nErr));
                 return false;
             }
         }
