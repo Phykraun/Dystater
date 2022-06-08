@@ -550,4 +550,18 @@ struct CBlockTemplate
 
 
 
-#endif
+class CValidationInterface {
+protected:
+    virtual void SyncTransaction(const CTransaction &tx, const CBlock *pblock) {};
+    virtual void EraseFromWallet(const uint256 &hash) {};
+    virtual void SetBestChain(const CBlockLocator &locator) {};
+    virtual void UpdatedTransaction(const uint256 &hash) {};
+    virtual void Inventory(const uint256 &hash) {};
+    virtual void ResendWalletTransactions() {};
+    virtual void BlockChecked(const CBlock&, const CValidationState&) {};
+    friend void ::RegisterValidationInterface(CValidationInterface*);
+    friend void ::UnregisterValidationInterface(CValidationInterface*);
+    friend void ::UnregisterAllValidationInterfaces();
+};
+
+#endif // DYSTATER_MAIN_H
