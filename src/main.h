@@ -479,42 +479,58 @@ public:
                  unsigned char _chRejectCode=0, std::string _strRejectReason="") {
         return DoS(0, ret, _chRejectCode, _strRejectReason);
     }
-    bool Error() {
+    bool Error(std::string strRejectReasonIn="") {
+        if (mode == MODE_VALID)
+            strRejectReason = strRejectReasonIn;
         mode = MODE_ERROR;
         return false;
     }
     bool Abort(const std::string &msg) {
         AbortNode(msg);
-        return Error();
+        return Error(msg);
     }
-    bool IsValid() {
+    bool IsValid() const {
         return mode == MODE_VALID;
     }
-    bool IsInvalid() {
+    bool IsInvalid() const {
         return mode == MODE_INVALID;
     }
-    bool IsError() {
+    bool IsError() const {
         return mode == MODE_ERROR;
     }
-    bool IsInvalid(int &nDoSOut) {
+    bool IsInvalid(int &nDoSOut) const {
         if (IsInvalid()) {
             nDoSOut = nDoS;
             return true;
         }
         return false;
     }
-    bool CorruptionPossible() {
+    bool CorruptionPossible() const {
         return corruptionPossible;
     }
+    unsigned char GetRejectCode() const { return chRejectCode; }
+    std::string GetRejectReason() const { return strRejectReason; }
 };
 
+/** RAII wrapper for VerifyDB: Verify consistency of the block and coin databases */
+class CVerifyDB {
+public:
+    CVerifyDB();
+    ~CVerifyDB();
+    bool VerifyDB(CCoinsView *coinsview, int nCheckLevel, int nCheckDepth);
+};
 
+/** Find the last common block between the parameter chain and a locator. */
+CBlockIndex* FindForkInGlobalIndex(const CChain& chain, const CBlockLocator& locator);
 
+/** Mark a block as invalid. */
+bool InvalidateBlock(CValidationState& state, CBlockIndex *pindex);
 
+/** Remove invalidity status from a block and its descendants. */
+bool ReconsiderBlock(CValidationState& state, CBlockIndex *pindex);
 
-
-
-
+/** The currently-connected chain of blocks. */
+extern CChain chainActive;
 
 /** Global variable that points to the active CCoinsView (protected by cs_main) */
 extern CCoinsViewCache *pcoinsTip;
@@ -525,7 +541,7 @@ extern CBlockTreeDB *pblocktree;
 struct CBlockTemplate
 {
     CBlock block;
-    std::vector<int64_t> vTxFees;
+    std::vector<CAmount> vTxFees;
     std::vector<int64_t> vTxSigOps;
 };
 
@@ -533,32 +549,5 @@ struct CBlockTemplate
 
 
 
-
-/** Used to relay blocks as header + vector<merkle branch>
- * to filtered nodes.
- */
-class CMerkleBlock
-{
-public:
-    // Public only for unit testing
-    CBlockHeader header;
-    CPartialMerkleTree txn;
-
-public:
-    // Public only for unit testing and relay testing
-    // (not relayed)
-    std::vector<std::pair<unsigned int, uint256> > vMatchedTxn;
-
-    // Create from a CBlock, filtering transactions according to filter
-    // Note that this will call IsRelevantAndUpdate on the filter for each transaction,
-    // thus the filter will likely be modified.
-    CMerkleBlock(const CBlock& block, CBloomFilter& filter);
-
-    IMPLEMENT_SERIALIZE
-    (
-        READWRITE(header);
-        READWRITE(txn);
-    )
-};
 
 #endif
