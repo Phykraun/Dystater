@@ -1,4 +1,8 @@
-// Copyright (c) 2020-2021 Phykraun
+// Copyright (c) 2009-2010 Satoshi Nakamoto
+// Copyright (c) 2009-2014 The Bitcoin developers
+// Copyright (c) 2021-2022 The Dystater developers
+// Distributed under the MIT/X11 software license, see the accompanying
+// file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
 #ifndef DYSTATER_NET_H
 #define DYSTATER_NET_H
@@ -225,7 +229,6 @@ public:
     size_t nSendOffset; // offset inside the first vSendMsg already sent
     uint64_t nSendBytes;
     std::deque<CSerializeData> vSendMsg;
-
     CCriticalSection cs_vSend;
 
     std::deque<CInv> vRecvGetData;
@@ -269,18 +272,22 @@ protected:
     // Key is IP address, value is banned-until-time
     static std::map<CNetAddr, int64_t> setBanned;
     static CCriticalSection cs_setBanned;
-    int nMisbehavior;
+
+    // Whitelisted ranges. Any node connecting from these is automatically
+    // whitelisted (as well as those connecting to whitelisted binds).
+    static std::vector<CSubNet> vWhitelistedRange;
+    static CCriticalSection cs_vWhitelistedRange;
+
+    // Basic fuzz-testing
+    void Fuzz(int nChance); // modifies ssSend
 
 public:
     uint256 hashContinue;
-    CBlockIndex* pindexLastGetBlocksBegin;
-    uint256 hashLastGetBlocksEnd;
     int nStartingHeight;
-    bool fStartSync;
 
     // flood relay
     std::vector<CAddress> vAddrToSend;
-    std::set<CAddress> setAddrKnown;
+    mruset<CAddress> setAddrKnown;
     bool fGetAddr;
     std::set<uint256> setKnown;
 
@@ -288,64 +295,36 @@ public:
     mruset<CInv> setInventoryKnown;
     std::vector<CInv> vInventoryToSend;
     CCriticalSection cs_inventory;
-    std::multimap<int64, CInv> mapAskFor;
+    std::multimap<int64_t, CInv> mapAskFor;
 
-    CNode(SOCKET hSocketIn, CAddress addrIn, std::string addrNameIn = "", bool fInboundIn=false) : ssSend(SER_NETWORK, MIN_PROTO_VERSION)
-    {
-        nServices = 0;
-        hSocket = hSocketIn;
-        nRecvVersion = MIN_PROTO_VERSION;
-        nLastSend = 0;
-        nLastRecv = 0;
-        nSendBytes = 0;
-        nRecvBytes = 0;
-        nLastSendEmpty = GetTime();
-        nTimeConnected = GetTime();
-        addr = addrIn;
-        addrName = addrNameIn == "" ? addr.ToStringIPPort() : addrNameIn;
-        nVersion = 0;
-        strSubVer = "";
-        fOneShot = false;
-        fClient = false; // set by version message
-        fInbound = fInboundIn;
-        fNetworkNode = false;
-        fSuccessfullyConnected = false;
-        fDisconnect = false;
-        nRefCount = 0;
-        nSendSize = 0;
-        nSendOffset = 0;
-        hashContinue = 0;
-        pindexLastGetBlocksBegin = 0;
-        hashLastGetBlocksEnd = 0;
-        nStartingHeight = -1;
-        fStartSync = false;
-        fGetAddr = false;
-        nMisbehavior = 0;
-        fRelayTxes = false;
-        setInventoryKnown.max_size(SendBufferSize() / 1000);
-        pfilter = new CBloomFilter();
+    // Ping time measurement:
+    // The pong reply we're expecting, or 0 if no pong expected.
+    uint64_t nPingNonceSent;
+    // Time (in usec) the last ping was sent, or 0 if no ping was ever sent.
+    int64_t nPingUsecStart;
+    // Last measured round-trip time.
+    int64_t nPingUsecTime;
+    // Whether a ping is requested.
+    bool fPingQueued;
 
-        // Be shy and don't send version until we hear
-        if (hSocket != INVALID_SOCKET && !fInbound)
-            PushVersion();
-    }
-
-    ~CNode()
-    {
-        if (hSocket != INVALID_SOCKET)
-        {
-            closesocket(hSocket);
-            hSocket = INVALID_SOCKET;
-        }
-        if (pfilter)
-            delete pfilter;
-    }
+    CNode(SOCKET hSocketIn, CAddress addrIn, std::string addrNameIn = "", bool fInboundIn=false);
+    ~CNode();
 
 private:
+    // Network usage totals
+    static CCriticalSection cs_totalBytesRecv;
+    static CCriticalSection cs_totalBytesSent;
+    static uint64_t nTotalBytesRecv;
+    static uint64_t nTotalBytesSent;
+
     CNode(const CNode&);
     void operator=(const CNode&);
+
 public:
 
+    NodeId GetId() const {
+      return id;
+    }
 
     int GetRefCount()
     {
@@ -357,7 +336,7 @@ public:
     unsigned int GetTotalRecvSize()
     {
         unsigned int total = 0;
-        BOOST_FOREACH(const CNetMessage &msg, vRecvMsg) 
+        BOOST_FOREACH(const CNetMessage &msg, vRecvMsg)
             total += msg.vRecv.size() + 24;
         return total;
     }
@@ -396,8 +375,13 @@ public:
         // Known checking here is only to save space from duplicates.
         // SendMessages will filter it again for knowns that were added
         // after addresses were pushed.
-        if (addr.IsValid() && !setAddrKnown.count(addr))
-            vAddrToSend.push_back(addr);
+        if (addr.IsValid() && !setAddrKnown.count(addr)) {
+            if (vAddrToSend.size() >= MAX_ADDR_TO_SEND) {
+                vAddrToSend[insecure_rand() % vAddrToSend.size()] = addr;
+            } else {
+                vAddrToSend.push_back(addr);
+            }
+        }
     }
 
 
@@ -418,96 +402,16 @@ public:
         }
     }
 
-    void AskFor(const CInv& inv)
-    {
-        // We're using mapAskFor as a priority queue,
-        // the key is the earliest time the request can be sent
-        int64 nRequestTime;
-        limitedmap<CInv, int64>::const_iterator it = mapAlreadyAskedFor.find(inv);
-        if (it != mapAlreadyAskedFor.end())
-            nRequestTime = it->second;
-        else
-            nRequestTime = 0;
-        if (fDebugNet)
-            printf("askfor %s   %"PRI64d" (%s)\n", inv.ToString().c_str(), nRequestTime, DateTimeStrFormat("%H:%M:%S", nRequestTime/1000000).c_str());
-
-        // Make sure not to reuse time indexes to keep things in the same order
-        int64 nNow = (GetTime() - 1) * 1000000;
-        static int64 nLastTime;
-        ++nLastTime;
-        nNow = std::max(nNow, nLastTime);
-        nLastTime = nNow;
-
-        // Each retry is 2 minutes after the last
-        nRequestTime = std::max(nRequestTime + 2 * 60 * 1000000, nNow);
-        if (it != mapAlreadyAskedFor.end())
-            mapAlreadyAskedFor.update(it, nRequestTime);
-        else
-            mapAlreadyAskedFor.insert(std::make_pair(inv, nRequestTime));
-        mapAskFor.insert(std::make_pair(nRequestTime, inv));
-    }
-
-
+    void AskFor(const CInv& inv);
 
     // TODO: Document the postcondition of this function.  Is cs_vSend locked?
-    void BeginMessage(const char* pszCommand) EXCLUSIVE_LOCK_FUNCTION(cs_vSend)
-    {
-        ENTER_CRITICAL_SECTION(cs_vSend);
-        assert(ssSend.size() == 0);
-        ssSend << CMessageHeader(pszCommand, 0);
-        if (fDebug)
-            printf("sending: %s ", pszCommand);
-    }
+    void BeginMessage(const char* pszCommand) EXCLUSIVE_LOCK_FUNCTION(cs_vSend);
 
     // TODO: Document the precondition of this function.  Is cs_vSend locked?
-    void AbortMessage() UNLOCK_FUNCTION(cs_vSend)
-    {
-        ssSend.clear();
-
-        LEAVE_CRITICAL_SECTION(cs_vSend);
-
-        if (fDebug)
-            printf("(aborted)\n");
-    }
+    void AbortMessage() UNLOCK_FUNCTION(cs_vSend);
 
     // TODO: Document the precondition of this function.  Is cs_vSend locked?
-    void EndMessage() UNLOCK_FUNCTION(cs_vSend)
-    {
-        if (mapArgs.count("-dropmessagestest") && GetRand(atoi(mapArgs["-dropmessagestest"])) == 0)
-        {
-            printf("dropmessages DROPPING SEND MESSAGE\n");
-            AbortMessage();
-            return;
-        }
-
-        if (ssSend.size() == 0)
-            return;
-
-        // Set the size
-        unsigned int nSize = ssSend.size() - CMessageHeader::HEADER_SIZE;
-        memcpy((char*)&ssSend[CMessageHeader::MESSAGE_SIZE_OFFSET], &nSize, sizeof(nSize));
-
-        // Set the checksum
-        uint256 hash = Hash(ssSend.begin() + CMessageHeader::HEADER_SIZE, ssSend.end());
-        unsigned int nChecksum = 0;
-        memcpy(&nChecksum, &hash, sizeof(nChecksum));
-        assert(ssSend.size () >= CMessageHeader::CHECKSUM_OFFSET + sizeof(nChecksum));
-        memcpy((char*)&ssSend[CMessageHeader::CHECKSUM_OFFSET], &nChecksum, sizeof(nChecksum));
-
-        if (fDebug) {
-            printf("(%d bytes)\n", nSize);
-        }
-
-        std::deque<CSerializeData>::iterator it = vSendMsg.insert(vSendMsg.end(), CSerializeData());
-        ssSend.GetAndClear(*it);
-        nSendSize += (*it).size();
-
-        // If write queue empty, attempt "optimistic write"
-        if (it == vSendMsg.begin())
-            SocketSendData(this);
-
-        LEAVE_CRITICAL_SECTION(cs_vSend);
-    }
+    void EndMessage() UNLOCK_FUNCTION(cs_vSend);
 
     void PushVersion();
 
@@ -670,13 +574,10 @@ public:
         }
     }
 
-    void PushGetBlocks(CBlockIndex* pindexBegin, uint256 hashEnd);
     bool IsSubscribed(unsigned int nChannel);
     void Subscribe(unsigned int nChannel, unsigned int nHops=0);
     void CancelSubscribe(unsigned int nChannel);
     void CloseSocketDisconnect();
-    void Cleanup();
-
 
     // Denial-of-service detection/prevention
     // The idea is to detect peers that are behaving
