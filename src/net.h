@@ -3,25 +3,35 @@
 #ifndef DYSTATER_NET_H
 #define DYSTATER_NET_H
 
+#include "bloom.h"
+#include "compat.h"
+#include "hash.h"
+#include "limitedmap.h"
+#include "mruset.h"
+#include "netbase.h"
+#include "protocol.h"
+#include "random.h"
+#include "streams.h"
+#include "sync.h"
+#include "uint256.h"
+#include "utilstrencodings.h"
+
 #include <deque>
-#include <boost/array.hpp>
-#include <boost/foreach.hpp>
-#include <openssl/rand.h>
+#include <stdint.h>
 
 #ifndef WIN32
 #include <arpa/inet.h>
 #endif
 
-#include "mruset.h"
-#include "limitedmap.h"
-#include "netbase.h"
-#include "protocol.h"
-#include "addrman.h"
-#include "hash.h"
-#include "bloom.h"
+#include <boost/filesystem/path.hpp>
+#include <boost/foreach.hpp>
+#include <boost/signals2/signal.hpp>
 
-class CNode;
+class CAddrMan;
 class CBlockIndex;
+class CNode;
+
+
 extern int nBestHeight;
 
 
