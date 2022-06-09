@@ -31,6 +31,79 @@ class CAddrMan;
 class CBlockIndex;
 class CNode;
 
+namespace boost {
+    class thread_group;
+} // namespace boost
+
+/** Time between pings automatically sent out for latency probing and keepalive (in seconds). */
+static const int PING_INTERVAL = 2 * 60;
+/** Time after which to disconnect, after waiting for a ping response (or inactivity). */
+static const int TIMEOUT_INTERVAL = 20 * 60;
+/** The maximum number of entries in an 'inv' protocol message */
+static const unsigned int MAX_INV_SZ = 50000;
+
+
+/** The maximum number of new addresses to accumulate before announcing. */
+static const unsigned int MAX_ADDR_TO_SEND = 1000;
+/** -listen default */
+static const bool DEFAULT_LISTEN = true;
+/** -upnp default */
+#ifdef USE_UPNP
+static const bool DEFAULT_UPNP = USE_UPNP;
+#else
+static const bool DEFAULT_UPNP = false;
+#endif
+
+
+/** The maximum number of entries in mapAskFor */
+static const size_t MAPASKFOR_MAX_SZ = MAX_INV_SZ;
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 extern int nBestHeight;
 
