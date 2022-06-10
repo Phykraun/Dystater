@@ -595,14 +595,35 @@ public:
     // new code.
     static void ClearBanned(); // needed for unit testing
     static bool IsBanned(CNetAddr ip);
-    bool Misbehaving(int howmuch); // 1 == a little, 100 == a lot
+    static bool Ban(const CNetAddr &ip);
     void copyStats(CNodeStats &stats);
+
+    static bool IsWhitelistedRange(const CNetAddr &ip);
+    static void AddWhitelistedRange(const CSubNet &subnet);
+
+    // Network stats
+    static void RecordBytesRecv(uint64_t bytes);
+    static void RecordBytesSent(uint64_t bytes);
+
+    static uint64_t GetTotalBytesRecv();
+    static uint64_t GetTotalBytesSent();
 };
 
 
 
 class CTransaction;
-void RelayTransaction(const CTransaction& tx, const uint256& hash);
-void RelayTransaction(const CTransaction& tx, const uint256& hash, const CDataStream& ss);
+void RelayTransaction(const CTransaction& tx);
+void RelayTransaction(const CTransaction& tx, const CDataStream& ss);
 
-#endif
+/** Access to the (IP) address database (peers.dat) */
+class CAddrDB
+{
+private:
+    boost::filesystem::path pathAddr;
+public:
+    CAddrDB();
+    bool Write(const CAddrMan& addr);
+    bool Read(CAddrMan& addr);
+};
+
+#endif // DYSTATER_NET_H
