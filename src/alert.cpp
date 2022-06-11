@@ -1,0 +1,114 @@
+// Copyright (c) 2010 Satoshi Nakamoto
+// Copyright (c) 2009-2014 The Bitcoin developers
+// Copyright (c) 2021-2022 The Dystater developers
+// Distributed under the MIT software license, see the accompanying
+// file COPYING or http://www.opensource.org/licenses/mit-license.php.
+
+#include "alert.h"
+
+#include "chainparams.h"
+#include "clientversion.h"
+#include "net.h"
+#include "pubkey.h"
+#include "timedata.h"
+#include "ui_interface.h"
+#include "util.h"
+
+#include <stdint.h>
+#include <algorithm>
+#include <map>
+
+#include <boost/algorithm/string/classification.hpp>
+#include <boost/algorithm/string/replace.hpp>
+#include <boost/foreach.hpp>
+#include <boost/thread.hpp>
+
+using namespace std;
+
+map<uint256, CAlert> mapAlerts;
+CCriticalSection cs_mapAlerts;
+
+void CUnsignedAlert::SetNull()
+{
+    nVersion = 1;
+    nRelayUntil = 0;
+    nExpiration = 0;
+    nID = 0;
+    nCancel = 0;
+    setCancel.clear();
+    nMinVer = 0;
+    nMaxVer = 0;
+    setSubVer.clear();
+    nPriority = 0;
+
+    strComment.clear();
+    strStatusBar.clear();
+    strReserved.clear();
+}
+
+std::string CUnsignedAlert::ToString() const
+{
+    std::string strSetCancel;
+    BOOST_FOREACH(int n, setCancel)
+        strSetCancel += strprintf("%d ", n);
+    std::string strSetSubVer;
+
+    BOOST_FOREACH(std::string str, setSubVer)
+        strSetSubVer += "\"" + str + "\" ";
+    return strprintf(
+        "CAlert(\n"
+        "    nVersion     = %d\n"
+        "    nRelayUntil  = %d\n"
+        "    nExpiration  = %d\n"
+        "    nID          = %d\n"
+        "    nCancel      = %d\n"
+        "    setCancel    = %s\n"
+        "    nMinVer      = %d\n"
+        "    nMaxVer      = %d\n"
+        "    setSubVer    = %s\n"
+        "    nPriority    = %d\n"
+        "    strComment   = \"%s\"\n"
+        "    strStatusBar = \"%s\"\n"
+        ")\n",
+        nVersion,
+        nRelayUntil,
+        nExpiration,
+        nID,
+        nCancel,
+        strSetCancel,
+        nMinVer,
+        nMaxVer,
+        strSetSubVer,
+        nPriority,
+        strComment,
+        strStatusBar);
+}
+void CAlert::SetNull()
+{
+    CUnsignedAlert::SetNull();
+    vchMsg.clear();
+    vchSig.clear();
+}
+
+bool CAlert::IsNull() const
+{
+    return (nExpiration == 0);
+}
+
+uint256 CAlert::GetHash() const
+{
+    return Hash(this->vchMsg.begin(), this->vchMsg.end());
+}
+
+bool CAlert::IsInEffect() const
+{
+    return (GetAdjustedTime() < nExpiration);
+}
+
+bool CAlert::Cancels(const CAlert& alert) const
+{
+    if (!IsInEffect())
+        return false; // this was a no-op before 31403/00000
+    return (alert.nID <= nCancel || setCancel.count(alert.nID));
+}
+
