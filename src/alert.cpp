@@ -112,3 +112,60 @@ bool CAlert::Cancels(const CAlert& alert) const
     return (alert.nID <= nCancel || setCancel.count(alert.nID));
 }
 
+bool CAlert::AppliesTo(int nVersion, std::string strSubVerIn) const
+{
+    // TODO: rework for client-version-embedded-in-strSubVer ?
+    return (IsInEffect() &&
+            nMinVer <= nVersion && nVersion <= nMaxVer &&
+            (setSubVer.empty() || setSubVer.count(strSubVerIn)));
+}
+
+bool CAlert::AppliesToMe() const
+{
+    return AppliesTo(PROTOCOL_VERSION, FormatSubVersion(CLIENT_NAME, CLIENT_VERSION, std::vector<std::string>()));
+}
+
+bool CAlert::RelayTo(CNode* pnode) const
+{
+    if (!IsInEffect())
+        return false;
+    // don't relay to nodes which haven't sent their version message
+    if (pnode->nVersion == 0)
+        return false;
+    // returns true if wasn't already contained in the set
+    if (pnode->setKnown.insert(GetHash()).second)
+    {
+        if (AppliesTo(pnode->nVersion, pnode->strSubVer) ||
+            AppliesToMe() ||
+            GetAdjustedTime() < nRelayUntil)
+        {
+            pnode->PushMessage("alert", *this);
+            return true;
+        }
+    }
+    return false;
+}
+
+bool CAlert::CheckSignature() const
+{
+    CPubKey key(Params().AlertKey());
+    if (!key.Verify(Hash(vchMsg.begin(), vchMsg.end()), vchSig))
+        return error("CAlert::CheckSignature() : verify signature failed");
+
+    // Now unserialize the data
+    CDataStream sMsg(vchMsg, SER_NETWORK, PROTOCOL_VERSION);
+    sMsg >> *(CUnsignedAlert*)this;
+    return true;
+}
+
+CAlert CAlert::getAlertByHash(const uint256 &hash)
+{
+    CAlert retval;
+    {
+        LOCK(cs_mapAlerts);
+        map<uint256, CAlert>::iterator mi = mapAlerts.find(hash);
+        if(mi != mapAlerts.end())
+            retval = mi->second;
+    }
+    return retval;
+}
