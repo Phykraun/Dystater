@@ -1,7 +1,7 @@
 dnl Helper for cases where a qt dependency is not met.
 dnl Output: If qt version is auto, set dystater_enable_qt to false. Else, exit.
 AC_DEFUN([DYSTATER_QT_FAIL],[
-  if test "x$dystater_qt_want_version" = "xauto" && test x$dystater_qt_force != xyes; then
+  if test "x$dystater_qt_want_version" = "xauto" && test "x$dystater_qt_force" != "xyes"; then
     if test x$dystater_enable_qt != xno; then
       AC_MSG_WARN([$1; dystater-qt frontend will not be built])
     fi
@@ -11,13 +11,13 @@ AC_DEFUN([DYSTATER_QT_FAIL],[
   fi
 ])
 
-AC_DEFUN([DYSTATER_QT_CHECK], [
-  if test "x$dystater_enable_qt" != "xno" && test x$dystater_qt_want_version != xno; then
+AC_DEFUN([DYSTATER_QT_CHECK],[
+  if test "x$dystater_enable_qt" != "xno" && test "x$dystater_qt_want_version" != "xno"; then
     true
-    $1
+    $1dnl
   else
     true
-    $2
+    $2dnl
   fi
 ])
 
@@ -30,8 +30,8 @@ dnl Inputs: $2: List of programs to search for
 dnl Inputs: $3: Look for $2 here before $PATH
 dnl Inputs: $4: If "yes", don't fail if $2 is not found.
 dnl Output: $1 is set to the path of $2 if found. $2 are searched in order.
-AC_DEFUN([DYSTATER_QT_PATH_PROGS], [
-   DYSTATER_QT_CHECK([
+AC_DEFUN([DYSTATER_QT_PATH_PROGS],[
+  DYSTATER_QT_CHECK([
     if test "x$3" != "x"; then
       AC_PATH_PROGS($1,$2,,$3)
     else
@@ -68,7 +68,7 @@ AC_DEFUN([DYSTATER_QT_INIT],[
   AC_ARG_WITH([qt-plugindir],[AS_HELP_STRING([--with-qt-plugindir=PLUGIN_DIR],[specify qt plugin path (overridden by pkgconfig)])], [qt_plugin_path=$withval], [])
 
 
-  
+
   AC_ARG_WITH([qt-translationdir],[AS_HELP_STRING([--with-qt-translationdir=PLUGIN_DIR],[specify qt translation path (overridden by pkgconfig)])], [qt_translation_path=$withval], [])
   AC_ARG_WITH([qt-bindir],[AS_HELP_STRING([--with-qt-bindir=BIN_DIR],[specify qt bin path])], [qt_bin_path=$withval], [])
 
@@ -96,9 +96,8 @@ AC_DEFUN([DYSTATER_QT_CONFIGURE],[
   fi
 
   if test x$use_pkgconfig = xyes; then
-    DYSTATER_QT_CHECK(
-      [_DYSTATER_QT_FIND_LIBS_WITH_PKGCONFIG([$2])])
-    else
+    DYSTATER_QT_CHECK([_DYSTATER_QT_FIND_LIBS_WITH_PKGCONFIG([$2])])
+  else
     DYSTATER_QT_CHECK([_DYSTATER_QT_FIND_LIBS_WITHOUT_PKGCONFIG])
   fi
 
@@ -119,7 +118,7 @@ AC_DEFUN([DYSTATER_QT_CONFIGURE],[
   if test xdystater_qt_got_major_vers = x5; then
     _DYSTATER_QT_IS_STATIC
     if test x$dystater_cv_static_qt = xyes; then
-      AC_DEFINE(QT_STATICPLUGIN, 1, [Define this symbol if qt plugins are static])
+      AC_DEFINE(QT_STATICPLUGIN, [1], [Define this symbol if qt plugins are static])
 
 
       if test x$qt_plugin_path != x; then
@@ -145,16 +144,16 @@ AC_DEFUN([DYSTATER_QT_CONFIGURE],[
         if test x$use_pkgconfig = xyes; then
           PKG_CHECK_MODULES([QTPRINT], [Qt5PrintSupport], [QT_LIBS="$QTPRINT_LIBS $QT_LIBS"])
         fi
-        AX_CHECK_LINK_FLAG([[-framework IOKit]],[QT_LIBS="$QT_LIBS -framework IOKit"],[AC_MSG_ERROR(could not find iokit framework)])
+        AX_CHECK_LINK_FLAG([[-framework IOKit]],[QT_LIBS="$QT_LIBS -framework IOKit"],[AC_MSG_ERROR(could not iokit framework)])
 
 
         _DYSTATER_QT_CHECK_STATIC_PLUGINS([Q_IMPORT_PLUGIN(QCocoaIntegrationPlugin)],[-lqcocoa])
-        AC_DEFINE(QT_QPA_PLATFORM_COCOA, 1, [Define this symbol if the qt platform is cocoa])
+        AC_DEFINE(QT_QPA_PLATFORM_COCOA, [1], [Define this symbol if the qt platform is cocoa])
       fi
     fi
   else
     if test x$TARGET_OS = xwindows; then
-      AC_DEFINE(QT_STATICPLUGIN, 1, [Define this symbol if qt plugins are static])
+      AC_DEFINE(QT_STATICPLUGIN, [1], [Define this symbol if qt plugins are static])
       if test x$qt_plugin_path != x; then
         QT_LIBS="$QT_LIBS -L$qt_plugin_path/accessible"
         QT_LIBS="$QT_LIBS -L$qt_plugin_path/codecs"
@@ -247,7 +246,8 @@ dnl Internal. Check if the included version of Qt is Qt5.
 dnl Requires: INCLUDES must be populated as necessary.
 dnl Output: dystater_cv_qt5=yes|no
 AC_DEFUN([_DYSTATER_QT_CHECK_QT5],[
-  AC_CACHE_CHECK(for Qt 5, dystater_cv_qt5,[AC_COMPILE_IFELSE([AC_LANG_PROGRAM(
+  AC_CACHE_CHECK(for Qt 5, dystater_cv_qt5,[
+  AC_COMPILE_IFELSE([AC_LANG_PROGRAM(
     [[#include <QtCore>]],
     [[
       #if QT_VERSION < 0x050000
@@ -316,7 +316,8 @@ dnl Outputs: have_qt_test and have_qt_dbus are set (if applicable) to yes|no.
 
 
 AC_DEFUN([_DYSTATER_QT_FIND_LIBS_WITH_PKGCONFIG],[
-  m4_ifdef([PKG_CHECK_MODULES],[auto_priority_version=$1])
+  m4_ifdef([PKG_CHECK_MODULES],[
+  auto_priority_version=$1
   if test x$auto_priority_version = x; then
     auto_priority_version=qt5
   fi
@@ -339,6 +340,7 @@ AC_DEFUN([_DYSTATER_QT_FIND_LIBS_WITH_PKGCONFIG],[
       elif test x$dystater_qt_want_version = xqt4 || ( test x$dystater_qt_want_version = xauto && test x$auto_priority_version = xqt4 ); then
         PKG_CHECK_MODULES([QT], [$qt4_modules], [QT_INCLUDES="$QT_CFLAGS"; have_qt=yes], [have_qt=no])
       fi
+
 
       dnl qt version is set to 'auto' and the preferred version wasn't found. Now try the other.
       if test x$have_qt = xno && test x$dystater_qt_want_version = xauto; then
@@ -397,10 +399,10 @@ AC_DEFUN([_DYSTATER_QT_FIND_LIBS_WITHOUT_PKGCONFIG],[
     if test x$dystater_cv_qt5 = xyes || test x$dystater_qt_want_version = xqt5; then
       QT_LIB_PREFIX=Qt5
       dystater_qt_got_major_vers=5
-      else
-        QT_LIB_PREFIX=Qt
-        dystater_qt_got_major_vers=4
-      fi
+    else
+      QT_LIB_PREFIX=Qt
+      dystater_qt_got_major_vers=4
+    fi
   ])
 
   DYSTATER_QT_CHECK([
@@ -422,7 +424,7 @@ AC_DEFUN([_DYSTATER_QT_FIND_LIBS_WITHOUT_PKGCONFIG],[
   DYSTATER_QT_CHECK(AC_CHECK_LIB([${QT_LIB_PREFIX}Gui]    ,[main],,DYSTATER_QT_FAIL(lib$QT_LIB_PREFIXGui not found)))
   DYSTATER_QT_CHECK(AC_CHECK_LIB([${QT_LIB_PREFIX}Network],[main],,DYSTATER_QT_FAIL(lib$QT_LIB_PREFIXNetwork not found)))
 
-  
+
   if test x$dystater_qt_got_major_vers = x5; then
     DYSTATER_QT_CHECK(AC_CHECK_LIB([${QT_LIB_PREFIX}Widgets],[main],,DYSTATER_QT_FAIL(lib$QT_LIB_PREFIXWidgets not found)))
   if
